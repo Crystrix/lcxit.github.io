@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>图形学作业</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<style>
+			body {
+				background-color: #fff;
+				color: #111;
+				margin: 0px;
+				overflow: hidden;
+				font-family: Monospace;
+				font-size: 13px;
+			}
+
+			#info {
+				position: absolute;
+				top: 0px; width: 100%;
+				color: #fff;
+				background:rgba(0,0,0,0.65);
+				padding: 5px;
+				text-align: center;
+				z-index:100;
+				display:block;
+			}
+
+			a {
+				color: #0080ff;
+				text-decoration: none;
+			}
+
+			a:hover {
+				color: #f00;
+			}
+
+			#footer { width: 100%; margin: 2em auto; text-align: center; position: absolute; bottom: 0 }
+			strong { color: red }
+
+			#stats { position: absolute; top:0; left: 0 }
+			#stats #fps { background: transparent !important }
+			#stats #fps #fpsText { color: #555 !important }
+			#stats #fps #fpsGraph { display: none }
+		</style>
+	</head>
+	<body>
+
+		<div id="container"></div>
+		<div id="info">	 WebGL实时光照 </div>
+
+		<div id="footer">
+			按下 <strong>WASD</strong> 键使得汽车移动
+		</div>
+
+		<script src="src/three.min.js"></script>
+
+		<script src="src/OrbitControls.js"></script>
+
+		<script src="src/Detector.js"></script>
+		<script src="src/stats.min.js"></script>
+		<script src="src/BinaryLoader.js"></script>
+		<script src="src/Car.js"></script>
+		<script src="src/RenderPass.js"></script>
+
+		<script type="x-shader/x-vertex" id="vertexShader">
+
+			varying vec3 vWorldPosition;
+
+			void main() {
+
+				vec4 worldPosition = modelMatrix * vec4( position, 1.0 );
+				vWorldPosition = worldPosition.xyz;
+
+				gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+
+			}
+
+		</script>
+
+		<script type="x-shader/x-fragment" id="fragmentShader">
+
+			uniform vec3 topColor;
+			uniform vec3 bottomColor;
+			uniform float offset;
+			uniform float exponent;
+
+			varying vec3 vWorldPosition;
+
+			void main() {
+
+				float h = normalize( vWorldPosition + offset ).y;
+				gl_FragColor = vec4( mix( bottomColor, topColor, max( pow( max( h , 0.0), exponent ), 0.0 ) ), 1.0 );
+
+			}
+
+		</script>
+
+		<script>
+
+			if ( ! Detector.webgl ) Detector.addGetWebGLMessage();
+			var v = 0.9, vdir = 1;
+			var camera, scene, renderer, dirLight, hemiLight;
+			var morphs = [];
+			var stats;
+			var sprites = [];
+			var clock = new THREE.Clock();
+			var textureCube;
+			var veyron;
+			var CARS = {
+					"veyron": 	{
+						name:	"Bugatti Veyron",
+						url: 	"model/veyron/VeyronNoUv_bin.js",
+						author: '<a href="http://artist-3d.com/free_3d_models/dnm/model_disp.php?uid=1129" target="_blank">Troyano</a>',
+						init_rotation: [ 0, 1, 0 ],
+						scale: 0.1,
+						init_material: 4,
+						body_materials: [ 2 ],
+						object: null,
+						buttons: null,
+						materials: null
+					}
+				};			
+			var controlsVeyron = {
+
+				moveForward: false,
+				moveBackward: false,
+				moveLeft: false,
+				moveRight: false
+
+			};		
+			var carLoader = new THREE.BinaryLoader( true );
+			var mlib;
+			var flareA, flareB;
+			init();
+			animate();
+
+			function init() {
+
+				var container = document.getElementById( 'container' );
+
+				//相机
+				camera = new THREE.PerspectiveCamera( 20, window.innerWidth / window.innerHeight, 1, 5000 );
+				camera.position.set( 0, 0, 250 );
+				controls = new THREE.OrbitControls( camera );
+				scene = new THREE.Scene();
+				scene.fog = new THREE.Fog( 0xffffff, 1, 5000 );
+				scene.fog.color.setHSL( 0.6, 0, 1 );
+
+				// 光照
+				flareA = THREE.ImageUtils.loadTexture( "texture/lensflare2.jpg" );
+				flareB = THREE.ImageUtils.loadTexture( "texture/lensflare0.png" );
+				hemiLight = new THREE.HemisphereLight( 0xffffff, 0xffffff, 0.6 );
+				hemiLight.color.setHSL( 0.6, 1, 0.6 );
+				hemiLight.groundColor.setHSL( 0.095, 1, 0.75 );
+				hemiLight.position.set( 0, 500, 0 );
+				scene.add( hemiLight );
+
+				dirLight = new THREE.DirectionalLight( 0xffffff, 1 );
+				dirLight.color.setHSL( 0.1, 1, 0.95 );
+				dirLight.position.set( -1, 1.75, 1 );
+				dirLight.position.multiplyScalar( 50 );
+				scene.add( dirLight );
+
+				dirLight.castShadow = true;
+
+				dirLight.shadowMapWidth = 2048;
+				dirLight.shadowMapHeight = 2048;
+
+				var d = 100;
+
+				dirLight.shadowCameraLeft = -d;
+				dirLight.shadowCameraRight = d;
+				dirLight.shadowCameraTop = d;
+				dirLight.shadowCameraBottom = -d;
+
+				dirLight.shadowCameraFar = 3500;
+				dirLight.shadowBias = -0.0001;
+				dirLight.shadowDarkness = 0.35;
+				//dirLight.shadowCameraVisible = true;
+
+				var sphere = new THREE.SphereGeometry( 0.5, 16, 8 );
+				light1 = new THREE.PointLight( 0xff0040, 2, 50 );
+				light1.add( new THREE.Mesh( sphere, new THREE.MeshBasicMaterial( { color: 0xff0040 } ) ) );
+				scene.add( light1 );
+
+				light2 = new THREE.PointLight( 0x0040ff, 2, 50 );
+				light2.add( new THREE.Mesh( sphere, new THREE.MeshBasicMaterial( { color: 0x0040ff } ) ) );
+				scene.add( light2 );
+
+				light3 = new THREE.PointLight( 0x80ff80, 2, 50 );
+				light3.add( new THREE.Mesh( sphere, new THREE.MeshBasicMaterial( { color: 0x80ff80 } ) ) );
+				
+				scene.add( light3 );
+
+				light4 = new THREE.PointLight( 0xffaa00, 2, 50 );
+				light4.add( new THREE.Mesh( sphere, new THREE.MeshBasicMaterial( { color: 0xffaa00 } ) ) );
+				
+				scene.add( light4 );
+				
+				// 地面
+
+				var groundGeo = new THREE.PlaneGeometry( 10000, 10000 );
+				var groundMat = new THREE.MeshPhongMaterial( { ambient: 0xffffff, color: 0xffffff, specular: 0x050505 } );
+				groundMat.color.setHSL( 0.095, 1, 0.75 );
+
+				var ground = new THREE.Mesh( groundGeo, groundMat );
+				ground.rotation.x = -Math.PI/2;
+				ground.position.y = -33;
+				scene.add( ground );
+
+				ground.receiveShadow = true;
+
+				// 天空
+
+				var vertexShader = document.getElementById( 'vertexShader' ).textContent;
+				var fragmentShader = document.getElementById( 'fragmentShader' ).textContent;
+				var uniforms = {
+					topColor: 	 { type: "c", value: new THREE.Color( 0x0077ff ) },
+					bottomColor: { type: "c", value: new THREE.Color( 0xffffff ) },
+					offset:		 { type: "f", value: 33 },
+					exponent:	 { type: "f", value: 0.6 }
+				}
+				uniforms.topColor.value.copy( hemiLight.color );
+
+				scene.fog.color.copy( uniforms.bottomColor.value );
+
+				var skyGeo = new THREE.SphereGeometry( 4000, 32, 15 );
+				var skyMat = new THREE.ShaderMaterial( { vertexShader: vertexShader, fragmentShader: fragmentShader, uniforms: uniforms, side: THREE.BackSide } );
+
+				var sky = new THREE.Mesh( skyGeo, skyMat );
+				
+				var cubeMap = new THREE.CubeTexture( [] );
+				cubeMap.format = THREE.RGBFormat;
+				cubeMap.flipY = false;
+				var skyboxLoader = new THREE.ImageLoader();
+				skyboxLoader.load( 'texture/skyboxsun25degtest.png', function ( image ) {
+
+					var getSide = function ( x, y ) {
+
+						var size = 1024;
+
+						var canvas = document.createElement( 'canvas' );
+						canvas.width = size;
+						canvas.height = size;
+
+						var context = canvas.getContext( '2d' );
+						context.drawImage( image, - x * size, - y * size );
+
+						return canvas;
+
+					};
+
+					cubeMap.images[ 0 ] = getSide( 2, 1 ); // px
+					cubeMap.images[ 1 ] = getSide( 0, 1 ); // nx
+					cubeMap.images[ 2 ] = getSide( 1, 0 ); // py
+					cubeMap.images[ 3 ] = getSide( 1, 2 ); // ny
+					cubeMap.images[ 4 ] = getSide( 1, 1 ); // pz
+					cubeMap.images[ 5 ] = getSide( 3, 1 ); // nz
+					cubeMap.needsUpdate = true;
+
+				} );
+
+				var cubeShader = THREE.ShaderLib['cube'];
+				cubeShader.uniforms['tCube'].value = cubeMap;
+
+				var skyBoxMaterial = new THREE.ShaderMaterial( {
+					fragmentShader: cubeShader.fragmentShader,
+					vertexShader: cubeShader.vertexShader,
+					uniforms: cubeShader.uniforms,
+					depthWrite: false,
+					side: THREE.BackSide
+				});
+
+				var skyBox = new THREE.Mesh(
+					new THREE.BoxGeometry( 1000, 1000, 1000 ),
+					skyBoxMaterial
+				);
+				skyBox.receiveShadow = false;
+				skyBox.castShadow = false;
+				scene.add( skyBox );
+				
+				// 模型
+				var loader = new THREE.JSONLoader();
+
+				loader.load( "model/flamingo.js", function( geometry ) {
+
+					morphColorsToFaceColors( geometry );
+					geometry.computeMorphNormals();
+
+					var material = new THREE.MeshPhongMaterial( { color: 0xffffff, specular: 0xffffff, shininess: 20, morphTargets: true, morphNormals: true, vertexColors: THREE.FaceColors, shading: THREE.SmoothShading } );
+					var meshAnim = new THREE.MorphAnimMesh( geometry, material );
+
+					meshAnim.duration = 1000;
+
+					var s = 0.1;
+					meshAnim.scale.set( s, s, s );
+					meshAnim.position.y = 15;
+					meshAnim.rotation.y = -1;
+
+					meshAnim.castShadow = true;
+					meshAnim.receiveShadow = true;
+
+					scene.add( meshAnim );
+					morphs.push( meshAnim );
+
+				} );
+
+				// 渲染器
+
+				renderer = new THREE.WebGLRenderer( { antialias: true } );
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				container.appendChild( renderer.domElement );
+
+				renderer.setClearColor( scene.fog.color, 1 );
+
+				renderer.gammaInput = true;
+				renderer.gammaOutput = true;
+
+				renderer.shadowMapEnabled = true;
+				renderer.shadowMapCullFace = THREE.CullFaceBack;
+
+				// 状态
+
+				stats = new Stats();
+
+				window.addEventListener( 'resize', onWindowResize, false );
+				document.addEventListener( 'keydown', onKeyDown, false );
+				document.addEventListener( 'keyup', onKeyUp, false );
+				textureCube = cubeMap;
+				
+				mlib = {
+
+					"Orange": 	new THREE.MeshLambertMaterial( { color: 0xff6600, ambient: 0xff2200, envMap: textureCube, combine: THREE.MixOperation, reflectivity: 0.3 } ),
+					"Blue": 	new THREE.MeshLambertMaterial( { color: 0x001133, ambient: 0x001133, envMap: textureCube, combine: THREE.MixOperation, reflectivity: 0.3 } ),
+					"Red": 		new THREE.MeshLambertMaterial( { color: 0x660000, ambient: 0x330000, envMap: textureCube, combine: THREE.MixOperation, reflectivity: 0.25 } ),
+					"Black": 	new THREE.MeshLambertMaterial( { color: 0x000000, ambient: 0x000000, envMap: textureCube, combine: THREE.MixOperation, reflectivity: 0.15 } ),
+					"White":	new THREE.MeshLambertMaterial( { color: 0xffffff, ambient: 0x666666, envMap: textureCube, combine: THREE.MixOperation, reflectivity: 0.25 } ),
+
+					"Carmine": 	new THREE.MeshPhongMaterial( { color: 0x770000, specular:0xffaaaa, envMap: textureCube, combine: THREE.MultiplyOperation } ),
+					"Gold": 	new THREE.MeshPhongMaterial( { color: 0xaa9944, specular:0xbbaa99, shininess:50, envMap: textureCube, combine: THREE.MultiplyOperation } ),
+					"Bronze":	new THREE.MeshPhongMaterial( { color: 0x150505, specular:0xee6600, shininess:10, envMap: textureCube, combine: THREE.MixOperation, reflectivity: 0.25 } ),
+					"Chrome": 	new THREE.MeshPhongMaterial( { color: 0xffffff, specular:0xffffff, envMap: textureCube, combine: THREE.Multiply } ),
+
+					"Orange metal": new THREE.MeshLambertMaterial( { color: 0xff6600, ambient: 0xff2200, envMap: textureCube, combine: THREE.MultiplyOperation } ),
+					"Blue metal": 	new THREE.MeshLambertMaterial( { color: 0x001133, ambient: 0x002266, envMap: textureCube, combine: THREE.MultiplyOperation } ),
+					"Red metal": 	new THREE.MeshLambertMaterial( { color: 0x770000, envMap: textureCube, combine: THREE.MultiplyOperation } ),
+					"Green metal": 	new THREE.MeshLambertMaterial( { color: 0x007711, envMap: textureCube, combine: THREE.MultiplyOperation } ),
+					"Black metal":	new THREE.MeshLambertMaterial( { color: 0x222222, envMap: textureCube, combine: THREE.MultiplyOperation } ),
+
+					"Pure chrome": 	new THREE.MeshLambertMaterial( { color: 0xffffff, envMap: textureCube } ),
+					"Dark chrome":	new THREE.MeshLambertMaterial( { color: 0x444444, envMap: textureCube } ),
+					"Darker chrome":new THREE.MeshLambertMaterial( { color: 0x222222, envMap: textureCube } ),
+
+					"Black glass": 	new THREE.MeshLambertMaterial( { color: 0x101016, envMap: textureCube, opacity: 0.975, transparent: true } ),
+					"Dark glass":	new THREE.MeshLambertMaterial( { color: 0x101046, envMap: textureCube, opacity: 0.25, transparent: true } ),
+					"Blue glass":	new THREE.MeshLambertMaterial( { color: 0x668899, envMap: textureCube, opacity: 0.75, transparent: true } ),
+					"Light glass":	new THREE.MeshBasicMaterial( { color: 0x223344, envMap: textureCube, opacity: 0.25, transparent: true, combine: THREE.MixOperation, reflectivity: 0.25 } ),
+
+					"Red glass":	new THREE.MeshLambertMaterial( { color: 0xff0000, opacity: 0.75, transparent: true } ),
+					"Yellow glass":	new THREE.MeshLambertMaterial( { color: 0xffffaa, opacity: 0.75, transparent: true } ),
+					"Orange glass":	new THREE.MeshLambertMaterial( { color: 0x995500, opacity: 0.75, transparent: true } ),
+
+					"Orange glass 50":	new THREE.MeshLambertMaterial( { color: 0xffbb00, opacity: 0.5, transparent: true } ),
+					"Red glass 50": 	new THREE.MeshLambertMaterial( { color: 0xff0000, opacity: 0.5, transparent: true } ),
+
+					"Fullblack rough":	new THREE.MeshLambertMaterial( { color: 0x000000 } ),
+					"Black rough":		new THREE.MeshLambertMaterial( { color: 0x050505 } ),
+					"Darkgray rough":	new THREE.MeshLambertMaterial( { color: 0x090909 } ),
+					"Red rough":		new THREE.MeshLambertMaterial( { color: 0x330500 } ),
+
+					"Darkgray shiny":	new THREE.MeshPhongMaterial( { color: 0x000000, specular: 0x050505 } ),
+					"Gray shiny":		new THREE.MeshPhongMaterial( { color: 0x050505, shininess: 20 } )
+
+				}
+				CARS[ "veyron" ].materials = {
+
+					body: [
+
+						[ "Orange metal", 	mlib[ "Orange metal" ] ],
+						[ "Blue metal", 	mlib[ "Blue metal" ] ],
+						[ "Red metal", 		mlib[ "Red metal" ] ],
+						[ "Green metal",	mlib[ "Green metal" ] ],
+						[ "Black metal", 	mlib[ "Black metal" ] ],
+
+						[ "Gold", 		mlib[ "Gold" ] ],
+						[ "Bronze", 	mlib[ "Bronze" ] ],
+						[ "Chrome", 	mlib[ "Chrome" ] ]
+
+					],
+
+				}
+
+				m = CARS[ "veyron" ].materials;
+				mi = CARS[ "veyron" ].init_material;
+
+				CARS[ "veyron" ].mmap = {
+
+					0: mlib[ "Black rough" ],		// tires + inside
+					1: mlib[ "Pure chrome" ],		// wheels + extras chrome
+					2: m.body[ mi ][ 1 ], 			// back / top / front torso
+					3: mlib[ "Blue glass" ],		// glass
+					4: mlib[ "Pure chrome" ],		// sides torso
+					5: mlib[ "Pure chrome" ],		// engine
+					6: mlib[ "Red glass 50" ],		// backlights
+					7: mlib[ "Orange glass 50" ]	// backsignals
+
+				}
+				
+				veyron = new THREE.Car();
+
+				veyron.modelScale = 0.1;
+				veyron.backWheelOffset = 2;
+
+				veyron.callback = function( object ) {
+
+					addCar( object, 0, -33, 0, 0 );
+					setMaterialsVeyron( object );
+
+					var sa = 2, sb = 5;
+
+					var params  = {
+
+						"a" : { map: flareA, useScreenCoordinates: false, color: 0xffffff, blending: THREE.AdditiveBlending },
+						"b" : { map: flareB, useScreenCoordinates: false, color: 0xffffff, blending: THREE.AdditiveBlending },
+
+						"ar" : { map: flareA, useScreenCoordinates: false, color: 0xff0000, blending: THREE.AdditiveBlending },
+						"br" : { map: flareB, useScreenCoordinates: false, color: 0xff0000, blending: THREE.AdditiveBlending }
+
+					};
+
+					var flares = [
+						// front
+						[ "a", sa, [ 47, 38, 120 ] ], [ "a", sa, [ 40, 38, 120 ] ], [ "a", sa, [ 32, 38, 122 ] ],
+						[ "b", sb, [ 47, 38, 120 ] ], [ "b", sb, [ 40, 38, 120 ] ], [ "b", sb, [ 32, 38, 122 ] ],
+						[ "a", sa, [ -47, 38, 120 ] ], [ "a", sa, [ -40, 38, 120 ] ], [ "a", sa, [ -32, 38, 122 ] ],
+						[ "b", sb, [ -47, 38, 120 ] ], [ "b", sb, [ -40, 38, 120 ] ], [ "b", sb, [ -32, 38, 122 ] ],
+						// back
+						[ "ar", sa, [ 22, 50, -123 ] ], [ "ar", sa, [ 32, 49, -123 ] ],
+						[ "br", sb, [ 22, 50, -123 ] ], [ "br", sb, [ 32, 49, -123 ] ],
+						[ "ar", sa, [ -22, 50, -123 ] ], [ "ar", sa, [ -32, 49, -123 ] ],
+						[ "br", sb, [ -22, 50, -123 ] ], [ "br", sb, [ -32, 49, -123 ] ],
+					];
+
+					for ( var i = 0; i < flares.length; i ++ ) {
+
+						var p = params[ flares[ i ][ 0 ] ];
+
+						var s = flares[ i ][ 1 ];
+
+						var x = flares[ i ][ 2 ][ 0 ];
+						var y = flares[ i ][ 2 ][ 1 ];
+						var z = flares[ i ][ 2 ][ 2 ];
+
+						var material = new THREE.SpriteMaterial( p );
+						var sprite = new THREE.Sprite( material );
+
+						var spriteWidth = 128;
+						var spriteHeight = 128;
+
+						sprite.scale.set( s * spriteWidth, s * spriteHeight, s );
+						sprite.position.set( x, y, z );
+
+						object.bodyMesh.add( sprite );
+
+						sprites.push( sprite );
+
+					}
+
+				};
+
+				veyron.loadPartsBinary( "model/veyron/parts/veyron_body_bin.js", "model/veyron/parts/veyron_wheel_bin.js" );
+				
+				
+				var start = Date.now();
+
+				
+				document.body.appendChild( carLoader.statusDomElement );
+
+				var scale = new THREE.Vector3( 1, 1, 1 );
+				carLoader.load( CARS[ "veyron" ].url, function( geometry ) { createScene( geometry, "veyron" ) } );
+			}
+
+			function morphColorsToFaceColors( geometry ) {
+
+				if ( geometry.morphColors && geometry.morphColors.length ) {
+
+					var colorMap = geometry.morphColors[ 0 ];
+
+					for ( var i = 0; i < colorMap.colors.length; i ++ ) {
+
+						geometry.faces[ i ].color = colorMap.colors[ i ];
+
+					}
+
+				}
+
+			}
+
+			function onWindowResize() {
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize( window.innerWidth, window.innerHeight );
+
+			}
+
+
+
+			//
+
+			function animate() {
+
+				requestAnimationFrame( animate );
+
+				render();
+				stats.update();
+
+			}
+
+			function render() {
+
+				var delta = clock.getDelta();
+				var time = Date.now() * 0.0005;
+
+
+				light1.position.x = Math.sin( time * 0.7 ) * 30;
+				light1.position.y = Math.cos( time * 0.5 ) * 40;
+				light1.position.z = Math.cos( time * 0.3 ) * 30;
+
+				light2.position.x = Math.cos( time * 0.3 ) * 30;
+				light2.position.y = Math.sin( time * 0.5 ) * 40;
+				light2.position.z = Math.sin( time * 0.7 ) * 30;
+
+				light3.position.x = Math.sin( time * 0.7 ) * 30;
+				light3.position.y = Math.cos( time * 0.3 ) * 40;
+				light3.position.z = Math.sin( time * 0.5 ) * 30;
+
+				light4.position.x = Math.sin( time * 0.3 ) * 30;
+				light4.position.y = Math.cos( time * 0.7 ) * 40;
+				light4.position.z = Math.sin( time * 0.5 ) * 30;
+
+				for ( var i = 0; i < morphs.length; i ++ ) {
+
+					morph = morphs[ i ];
+					morph.updateAnimation( 1000 * delta );
+
+				}
+
+
+				v = THREE.Math.clamp( v + 0.5 * delta * vdir, 0.1, 0.9 );
+				scene.fog.color.setHSL( 0.51, 0.5, v * 0.75 );
+
+				renderer.setClearColor( scene.fog.color, 1 );
+
+				var vnorm = ( v - 0.05 ) / ( 0.9 - 0.05 );
+
+				if ( vnorm < 0.3 ) {
+
+					setSpritesOpacity( 1 - v / 0.3 );
+
+				} else {
+
+					setSpritesOpacity( 0 );
+
+				}
+
+				if ( veyron.loaded ) {
+
+					veyron.bodyMaterials[ 1 ] = mlib[ "Chrome" ];
+					veyron.bodyMaterials[ 2 ] = mlib[ "Chrome" ];
+
+					veyron.wheelMaterials[ 0 ] = mlib[ "Chrome" ];
+
+				}
+				
+				// 更新汽车模型
+				veyron.updateCarModel( delta, controlsVeyron );
+				// 渲染立方体纹理
+
+				var updateCubemap = true;
+
+				if ( updateCubemap ) {
+
+					veyron.setVisible( false );
+
+
+					renderer.autoClear = true;
+
+					veyron.setVisible( true );
+
+				}
+
+				// 渲染场景
+				renderer.render( scene, camera );
+			}
+			function createScene( geometry, car ) {
+
+		
+				var m = new THREE.MeshFaceMaterial(),
+					s = CARS[ car ].scale * 1,
+					r = CARS[ car ].init_rotation,
+					materials = CARS[ car ].materials,
+					mi = CARS[ car ].init_material,
+					bm = CARS[ car ].body_materials;
+
+				for ( var i in CARS[ car ].mmap ) {
+
+					m.materials[ i ] = CARS[ car ].mmap[ i ];
+
+				}
+				var position = new THREE.Vector3(0, -22, 0 );
+
+				var mesh = new THREE.Mesh( geometry, m );
+				mesh.position.copy( position );
+				mesh.rotation.x = r[ 0 ];
+				mesh.rotation.y = r[ 1 ];
+				mesh.rotation.z = r[ 2 ];
+
+				mesh.scale.x = mesh.scale.y = mesh.scale.z = 0.3;
+				mesh.castShadow = true;
+				mesh.receiveShadow = true;
+
+				CARS[ car ].object = mesh;
+
+			}
+			function onKeyDown ( event ) {
+
+				switch( event.keyCode ) {
+
+					case 87: /*W*/ 	controlsVeyron.moveForward = true; break;
+
+					case 83: /*S*/ 	 controlsVeyron.moveBackward = true; break;
+
+					case 65: /*A*/   controlsVeyron.moveLeft = true; break;
+
+					case 68: /*D*/    controlsVeyron.moveRight = true; break;
+
+
+
+				}
+
+			};
+
+			function onKeyUp ( event ) {
+
+				switch( event.keyCode ) {
+
+					case 87: /*W*/	controlsVeyron.moveForward = false; break;
+
+					case 83: /*S*/	controlsVeyron.moveBackward = false; break;
+
+					case 65: /*A*/	controlsVeyron.moveLeft = false; break;
+
+					case 68: /*D*/	controlsVeyron.moveRight = false; break;
+
+				}
+
+			};			
+			function setSpritesOpacity( opacity ) {
+
+				for ( var i = 0; i < sprites.length; i ++ ) {
+
+					sprites[ i ].material.opacity = opacity;
+
+				}
+
+			}			
+			function addCar( object, x, y, z, s ) {
+
+				object.root.position.set( x, y, z );
+				scene.add( object.root );
+
+				object.enableShadows( true );
+			}
+			
+
+
+			function setMaterialsVeyron( car ) {
+
+				// 0 - top, front center, back sides
+				// 1 - front sides
+				// 2 - engine
+				// 3 - small chrome things
+				// 4 - backlights
+				// 5 - back signals
+				// 6 - bottom, interior
+				// 7 - windshield
+
+				// 车体
+
+				var materials = car.bodyMaterials;
+
+				materials[ 0 ] = mlib[ "Black metal" ];	// top, front center, back sides
+				materials[ 1 ] = mlib[ "Chrome" ];			// front sides
+				materials[ 2 ] = mlib[ "Chrome" ];			// engine
+				materials[ 3 ] = mlib[ "Dark chrome" ];	// small chrome things
+				materials[ 4 ] = mlib[ "Red glass" ];		// backlights
+				materials[ 5 ] = mlib[ "Orange glass" ];	// back signals
+				materials[ 6 ] = mlib[ "Black rough" ];	// bottom, interior
+				materials[ 7 ] = mlib[ "Blue glass" ];		// windshield
+
+				// 轮胎
+
+				materials = car.wheelMaterials;
+
+				materials[ 0 ] = mlib[ "Chrome" ];			// insides
+				materials[ 1 ] = mlib[ "Black rough" ];	// tire
+
+			}			
+		</script>
+	</body>
+</html>
